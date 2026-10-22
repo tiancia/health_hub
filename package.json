@@ -1,0 +1,13 @@
+{
+  "name": "shiyi-health-hub",
+  "version": "1.0.0",
+  "private": true,
+  "description": "时宜：保存在本机浏览器的生活与健康手账",
+  "scripts": {
+    "start": "node preview.mjs",
+    "test": "node --test data.test.cjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
