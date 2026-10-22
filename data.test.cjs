@@ -114,3 +114,59 @@ test('invalid writes leave the previous valid state intact', () => {
   assert.throws(() => Data.saveState(state, storage), /日期/);
   assert.equal(storage.getItem(Data.STORAGE_KEY), before);
 });
+
+test('version 1 backups without repeat settings default to daily active routines without changing the backup', () => {
+  const legacy = Data.createDefaultState();
+  legacy.routines.forEach(item => { delete item.days; delete item.paused; });
+  legacy.checks['2024-02-29'] = ['routine-wake'];
+  legacy.records.push(record());
+  const raw = JSON.stringify(legacy);
+  const storage = memoryStorage(raw);
+  const loaded = Data.loadState(storage);
+  assert.deepEqual(loaded.routines[0].days, [0, 1, 2, 3, 4, 5, 6]);
+  assert.equal(loaded.routines[0].paused, false);
+  assert.deepEqual(loaded.checks, legacy.checks);
+  assert.deepEqual(loaded.records, legacy.records);
+  assert.equal(storage.getItem(Data.STORAGE_KEY), raw);
+  assert.equal(legacy.routines[0].days, undefined);
+});
+
+test('weekday schedules and pauses survive storage and never erase historical check-ins', () => {
+  const storage = memoryStorage();
+  const state = Data.createDefaultState();
+  state.routines[0].days = [5, 1, 3];
+  state.routines[0].paused = true;
+  state.checks['2024-02-29'] = ['routine-wake'];
+  Data.saveState(state, storage);
+  const loaded = Data.loadState(storage);
+  assert.deepEqual(loaded.routines[0].days, [1, 3, 5]);
+  assert.equal(loaded.routines[0].paused, true);
+  assert.deepEqual(loaded.checks, state.checks);
+  assert.deepEqual(state.routines[0].days, [5, 1, 3]);
+});
+
+test('schedule matching uses the supplied calendar day, including Sunday and paused routines', () => {
+  const routine = { days: [1, 2, 3, 4, 5], paused: false };
+  assert.equal(Data.isRoutineScheduled(routine, '2026-10-23'), true);
+  assert.equal(Data.isRoutineScheduled(routine, '2026-10-24'), false);
+  assert.equal(Data.isRoutineScheduled({ days: [0, 6] }, '2026-10-25'), true);
+  assert.equal(Data.isRoutineScheduled({ days: [0, 6], paused: true }, '2026-10-25'), false);
+  assert.equal(Data.isRoutineScheduled({}, '2026-10-25'), true);
+  assert.throws(() => Data.isRoutineScheduled(routine, '2026-02-30'), /有效日期/);
+});
+
+test('invalid repeat settings fail before writing and leave the saved state intact', () => {
+  const storage = memoryStorage();
+  Data.saveState(Data.createDefaultState(), storage);
+  const raw = storage.getItem(Data.STORAGE_KEY);
+  for (const days of [[], null, 'all', [1, 1], [-1], [7], [1.5], ['1']]) {
+    const state = Data.createDefaultState();
+    state.routines[0].days = days;
+    assert.throws(() => Data.saveState(state, storage), /星期/);
+    assert.equal(storage.getItem(Data.STORAGE_KEY), raw);
+  }
+  const state = Data.createDefaultState();
+  state.routines[0].paused = 'false';
+  assert.throws(() => Data.saveState(state, storage), /暂停状态/);
+  assert.equal(storage.getItem(Data.STORAGE_KEY), raw);
+});

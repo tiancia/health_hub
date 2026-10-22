@@ -11,6 +11,7 @@
   const STORAGE_KEY = 'shiyi-health-v1';
   const ROUTINE_CATEGORIES = ['morning', 'meal', 'rest', 'move', 'focus', 'other'];
   const RECORD_TYPES = ['dental', 'checkup', 'vaccine', 'other'];
+  const EVERY_DAY = [0, 1, 2, 3, 4, 5, 6];
   const MAX_BYTES = 5 * 1024 * 1024;
 
   function fail(message) {
@@ -49,6 +50,11 @@
     return Math.round((dateValue(target) - dateValue(from === undefined ? todayKey() : from)) / 86400000);
   }
 
+  function isRoutineScheduled(routine, key = todayKey()) {
+    const weekday = new Date(dateValue(key)).getUTCDay();
+    return !routine.paused && (routine.days || EVERY_DAY).includes(weekday);
+  }
+
   function createDefaultState() {
     return {
       version: 1,
@@ -58,7 +64,7 @@
         { id: 'routine-noon', title: '午间休息', time: '12:30', category: 'rest', note: '' },
         { id: 'routine-move', title: '轻松活动', time: '18:30', category: 'move', note: '' },
         { id: 'routine-sleep', title: '准备休息', time: '23:00', category: 'rest', note: '' }
-      ],
+      ].map(item => ({ ...item, days: [...EVERY_DAY], paused: false })),
       checks: {},
       records: []
     };
@@ -90,12 +96,20 @@
       routineIds.add(id);
       if (typeof item.time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(item.time)) fail('作息时间必须为有效的 24 小时时间。');
       if (!ROUTINE_CATEGORIES.includes(item.category)) fail('作息分类不正确。');
+      const days = item.days === undefined ? [...EVERY_DAY] : item.days;
+      if (!Array.isArray(days) || !days.length || days.length > 7 ||
+          days.some(day => !Number.isInteger(day) || day < 0 || day > 6) || new Set(days).size !== days.length) {
+        fail('请至少选择一天，重复星期必须为不重复的有效星期。');
+      }
+      if (item.paused !== undefined && typeof item.paused !== 'boolean') fail('作息暂停状态不正确。');
       return {
         id: id,
         title: textValue(item.title, '作息名称', 80, false),
         time: item.time,
         category: item.category,
-        note: textValue(item.note, '备注', 2000, true)
+        note: textValue(item.note, '备注', 2000, true),
+        days: [...days].sort((a, b) => a - b),
+        paused: item.paused === true
       };
     });
 
@@ -190,6 +204,7 @@
     RECORD_TYPES: Object.freeze(RECORD_TYPES),
     todayKey: todayKey,
     dateDiff: dateDiff,
+    isRoutineScheduled: isRoutineScheduled,
     createDefaultState: createDefaultState,
     validateState: validateState,
     loadState: loadState,

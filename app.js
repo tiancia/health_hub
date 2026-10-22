@@ -17,6 +17,25 @@
   let state = null;
   let day = Data.todayKey();
   let toastTimer;
+  let todayFilter = 'all';
+  let recordStatus = 'all';
+  let nextRoutineId = null;
+
+  function repeatLabel(days) {
+    if (days.length === 7) return '每天';
+    if (days.length === 5 && [1, 2, 3, 4, 5].every(day => days.includes(day))) return '工作日';
+    if (days.length === 2 && days.includes(0) && days.includes(6)) return '周末';
+    return [1, 2, 3, 4, 5, 6, 0].filter(day => days.includes(day)).map(day => '周' + '日一二三四五六'[day]).join('、');
+  }
+
+  function updateRepeatSummary() {
+    const days = [...$('#routine-form').querySelectorAll('[name="days"]:checked')].map(input => Number(input.value));
+    $('#repeat-summary').textContent = days.length ? repeatLabel(days) + '重复' : '请至少选择一天';
+    document.querySelectorAll('[data-action="repeat-preset"]').forEach(button => {
+      const preset = button.dataset.days.split(',').map(Number);
+      button.setAttribute('aria-pressed', String(preset.length === days.length && preset.every(day => days.includes(day))));
+    });
+  }
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -123,23 +142,26 @@
   function routineRow(routine, plan = false) {
     const done = (state.checks[day] || []).includes(routine.id);
     const category = categories[routine.category];
-    const row = element('div', 'routine-row' + (done && !plan ? ' is-done' : ''));
+    const row = element('div', 'routine-row' + (done && !plan ? ' is-done' : '') + (plan && routine.paused ? ' is-paused' : '') + (!plan && routine.id === nextRoutineId ? ' is-next' : ''));
     const time = element('time', 'routine-time', routine.time);
     time.dateTime = routine.time;
     const marker = element('div', 'category-icon ' + routine.category);
     marker.append(icon(category.icon));
     const body = element('div', 'routine-body');
     body.append(element('h3', '', routine.title));
+    if (plan) body.append(element('span', 'routine-repeat', repeatLabel(routine.days) + (routine.paused ? ' · 已暂停' : Data.isRoutineScheduled(routine, day) ? ' · 今天有安排' : '')));
     if (routine.note) body.append(element('p', '', routine.note));
     row.append(time, marker, body);
     if (plan) {
       row.append(element('span', 'routine-category', category.label));
       const actions = element('div', 'row-actions');
-      actions.append(actionButton('edit-routine', '编辑' + routine.title, 'edit', routine.id), actionButton('delete-routine', '删除' + routine.title, 'trash', routine.id));
+      const pause = actionButton('pause-routine', (routine.paused ? '恢复' : '暂停') + routine.title, routine.paused ? 'play' : 'pause', routine.id);
+      pause.setAttribute('aria-pressed', String(routine.paused));
+      actions.append(pause, actionButton('edit-routine', '编辑' + routine.title, 'edit', routine.id), actionButton('delete-routine', '删除' + routine.title, 'trash', routine.id));
       row.append(actions);
     } else {
       const check = actionButton('toggle-routine', (done ? '取消打卡：' : '完成：') + routine.title, done ? 'check' : null, routine.id, 'check-button' + (done ? ' is-done' : ''));
-      if (!done) check.textContent = '';
+      if (!done) { check.textContent = ''; check.append(icon('check')); }
       check.setAttribute('aria-pressed', String(done));
       row.append(check);
     }
@@ -147,31 +169,45 @@
   }
 
   function renderRoutines() {
-    const routines = [...state.routines].sort((a, b) => a.time.localeCompare(b.time) || a.title.localeCompare(b.title, 'zh-CN'));
+    const plans = [...state.routines].sort((a, b) => Number(a.paused) - Number(b.paused) || a.time.localeCompare(b.time) || a.title.localeCompare(b.title, 'zh-CN'));
+    const checked = new Set(state.checks[day] || []);
+    // Keep completed items visible even when their schedule changes during the day.
+    const routines = plans.filter(item => Data.isRoutineScheduled(item, day) || checked.has(item.id)).sort((a, b) => a.time.localeCompare(b.time));
+    const clock = new Date();
+    const now = String(clock.getHours()).padStart(2, '0') + ':' + String(clock.getMinutes()).padStart(2, '0');
+    const pending = routines.filter(item => !checked.has(item.id));
+    const next = pending.find(item => item.time >= now) || pending[0];
+    nextRoutineId = next?.id || null;
     const todayList = $('#today-routines');
     const planList = $('#plan-routines');
-    todayList.replaceChildren(...routines.map(item => routineRow(item)));
-    planList.replaceChildren(...routines.map(item => routineRow(item, true)));
+    const visible = todayFilter === 'pending' ? pending : routines;
+    todayList.replaceChildren(...visible.map(item => routineRow(item)));
+    planList.replaceChildren(...plans.map(item => routineRow(item, true)));
     if (!routines.length) {
-      todayList.append(emptyState('从一件小事开始', '添一条你想坚持的作息，安排今天的节奏。', 'add-routine', '添加第一条作息'));
+      todayList.append(emptyState(plans.length ? '今天，留一点空白' : '从一件小事开始', plans.length ? '今天没有启用的作息，可以去计划中调整重复星期或恢复作息。' : '添一条你想坚持的作息，安排今天的节奏。', plans.length ? 'show-plans' : 'add-routine', plans.length ? '查看作息计划' : '添加第一条作息'));
+    } else if (!visible.length) {
+      todayList.append(emptyState('今天的安排，都完成了', '把余下的时间留给自己，也可以回看已经完成的小事。', 'show-all-routines', '查看已完成安排'));
+    }
+    if (!plans.length) {
       planList.append(emptyState('一天，由你来安排', '起床、用餐、活动和休息，都可以记在这里。', 'add-routine', '添加第一条作息'));
     }
-    $('#routine-count').textContent = routines.length + ' 项作息';
-    const checked = new Set(state.checks[day] || []);
+    $('#routine-count').textContent = plans.length + ' 项作息' + (plans.some(item => item.paused) ? ' / ' + plans.filter(item => item.paused).length + ' 项暂停' : '');
+    $('#pending-count').textContent = String(pending.length);
+    $('#today-routine-summary').textContent = routines.length ? '已完成 ' + (routines.length - pending.length) + ' 项，还剩 ' + pending.length + ' 项' : '按自己的节奏，安排今天。';
+    document.querySelectorAll('[data-action="filter-today"]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.filter === todayFilter)));
     const completed = routines.filter(item => checked.has(item.id)).length;
     const percent = routines.length ? Math.round(completed / routines.length * 100) : 0;
     $('#progress-number').replaceChildren(document.createTextNode(String(percent)), element('span', '', '%'));
     $('#progress-caption').textContent = completed + ' / ' + routines.length + ' 项';
     $('#progress-circle').style.strokeDashoffset = String(264 * (1 - percent / 100));
 
-    const clock = new Date();
-    const now = String(clock.getHours()).padStart(2, '0') + ':' + String(clock.getMinutes()).padStart(2, '0');
-    const next = routines.find(item => !checked.has(item.id) && item.time >= now);
-    const pending = routines.find(item => !checked.has(item.id));
-    $('#next-label').textContent = next ? '接下来的安排' : pending ? '按自己的节奏，继续今天' : routines.length ? '今天的安排都完成了' : '一天的节奏，由你开始';
-    $('#next-time').textContent = (next || pending)?.time || '好好';
-    $('#next-title').textContent = (next || pending)?.title || (routines.length ? '把余下的时间，留给自己' : '照顾自己');
-    $('#next-note').textContent = (next || pending)?.note || (pending ? '不必赶进度，完成一件就打一个卡。' : '从一个适合自己的小安排开始。');
+    $('#next-label').textContent = next ? (next.time >= now ? '接下来的安排' : '不着急，按自己的节奏来') : routines.length ? '今天的安排都完成了' : '今天，留一点空白';
+    $('#next-time').textContent = next?.time || (routines.length ? '完成' : '休息');
+    $('#next-title').textContent = next?.title || '把余下的时间，留给自己';
+    $('#next-note').textContent = next?.note || (next ? '准备好了就开始，完成后给自己一个小小的肯定。' : '生活不用满分，找到适合自己的节奏就好。');
+    $('#next-complete').hidden = !next;
+    $('#next-complete').setAttribute('aria-label', next ? '完成下一项：' + next.title : '今天没有待完成安排');
+    $('.day-progress').setAttribute('aria-label', '今日完成 ' + completed + ' 项，共 ' + routines.length + ' 项');
   }
 
   function renderUpcoming() {
@@ -195,8 +231,7 @@
       container.append(item);
     });
     if (upcoming.length > 3) {
-      const link = element('a', 'text-link upcoming-more', '查看全部 ' + upcoming.length + ' 项安排');
-      link.href = '#health';
+      const link = actionButton('show-planned', '查看全部 ' + upcoming.length + ' 项安排', null, null, 'text-link upcoming-more');
       container.append(link);
     }
   }
@@ -260,11 +295,28 @@
       summary.append(card);
     });
     const filter = $('#record-filter').value;
-    const records = state.records.filter(record => filter === 'all' || record.type === filter).reverse().sort((a, b) => b.date.localeCompare(a.date));
+    const query = $('#record-search').value.trim().toLocaleLowerCase();
+    const sort = $('#record-sort').value;
+    const filtered = Boolean(query || filter !== 'all' || recordStatus !== 'all' || sort !== 'newest');
+    const records = state.records.filter(record => {
+      const matchesType = filter === 'all' || record.type === filter;
+      const matchesSearch = !query || (record.title + ' ' + record.note).toLocaleLowerCase().includes(query);
+      const matchesStatus = recordStatus === 'all' || (record.nextDate && (recordStatus === 'planned' || record.nextDate <= day));
+      return matchesType && matchesSearch && matchesStatus;
+    }).reverse().sort((a, b) => {
+      if (sort === 'oldest') return a.date.localeCompare(b.date);
+      if (sort === 'upcoming') return (a.nextDate || '9999-99-99').localeCompare(b.nextDate || '9999-99-99') || b.date.localeCompare(a.date);
+      return b.date.localeCompare(a.date);
+    });
+    $('#record-results').textContent = filtered ? '找到 ' + records.length + ' 条，共 ' + state.records.length + ' 条记录' : '共 ' + records.length + ' 条记录，按发生日期从近到远排列';
+    $('#reset-record-filters').hidden = !filtered;
+    document.querySelectorAll('[data-action="filter-records"]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.filter === recordStatus)));
     const container = $('#health-records');
     container.replaceChildren();
     if (!records.length) {
-      container.append(emptyState(state.records.length ? '这个分类还没有记录' : '还记得上次体检是哪天吗？', '记下日期和备注，下次需要时就能轻松找到。', 'add-record', '添加一条记录', filter === 'all' ? 'checkup' : filter));
+      container.append(state.records.length && filtered
+        ? emptyState('没有找到符合条件的记录', '试试其他关键词，或清除筛选查看全部记录。', 'reset-record-filters', '清除筛选')
+        : emptyState('还记得上次体检是哪天吗？', '记下日期和备注，下次需要时就能轻松找到。', 'add-record', '添加一条记录', filter === 'all' ? 'checkup' : filter));
     }
     records.forEach(record => {
       const row = element('article', 'record-row');
@@ -288,11 +340,21 @@
     });
   }
 
+  function restoreActionFocus(target) {
+    if (!target || document.querySelector('dialog[open]')) return;
+    const replacement = [...document.querySelectorAll('.view:not([hidden]) [data-action]')].find(node => !node.hidden && node.dataset.action === target.action && node.dataset.id === target.id && node.dataset.filter === target.filter);
+    if (replacement) replacement.focus({ preventScroll: true });
+    else if (target.action === 'toggle-routine' || target.action === 'complete-next') $('[data-action="filter-today"][aria-pressed="true"]').focus({ preventScroll: true });
+  }
+
   function render() {
+    day = Data.todayKey();
     const focused = document.activeElement;
-    const focusTarget = focused?.matches('[data-action]') ? { action: focused.dataset.action, id: focused.dataset.id } : null;
+    const focusTarget = focused?.matches('[data-action]') ? { action: focused.dataset.action, id: focused.dataset.id, filter: focused.dataset.filter } : null;
     $('#today-date').textContent = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long', year: 'numeric' }).format(new Date());
     if (!state) {
+      $('#next-complete').hidden = true;
+      nextRoutineId = null;
       ['#today-routines', '#plan-routines', '#health-records', '#health-quick', '#health-summary', '#upcoming-list', '#week-days'].forEach(selector => {
         $(selector).replaceChildren(emptyState('记录暂时无法读取', '请查看页面上方的提示，先保留原始数据。'));
       });
@@ -303,13 +365,10 @@
     renderQuickHealth();
     renderWeek();
     renderRecords();
-    if (focusTarget && !document.querySelector('dialog[open]')) {
-      const replacement = [...document.querySelectorAll('.view:not([hidden]) [data-action]')].find(node => node.dataset.action === focusTarget.action && node.dataset.id === focusTarget.id);
-      replacement?.focus({ preventScroll: true });
-    }
+    restoreActionFocus(focusTarget);
   }
 
-  function navigate() {
+  function navigate(event) {
     const view = ['today', 'routine', 'health'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'today';
     const labels = { today: '今日概览', routine: '作息计划', health: '健康档案' };
     document.querySelectorAll('.view').forEach(node => { node.hidden = node.id !== 'view-' + view; });
@@ -321,6 +380,10 @@
     });
     $('#page-label').textContent = labels[view];
     document.title = labels[view] + ' · 时宜';
+    if (event) {
+      $('#main').focus({ preventScroll: true });
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    }
   }
 
   function canEdit() {
@@ -333,6 +396,7 @@
     const active = document.activeElement;
     dialog.returnFocus = active?.matches('[data-action]') ? { action: active.dataset.action, id: active.dataset.id } : null;
     dialog.showModal();
+    $('input[name="title"]', dialog)?.focus();
   }
 
   function openRoutine(id) {
@@ -340,10 +404,13 @@
     const form = $('#routine-form');
     const item = id ? state.routines.find(routine => routine.id === id) : null;
     form.reset();
+    form.elements.id.value = '';
     $('.form-error', form).textContent = '';
     ['id', 'title', 'time', 'category', 'note'].forEach(name => {
       if (item) form.elements[name].value = item[name];
     });
+    if (item) form.querySelectorAll('[name="days"]').forEach(input => { input.checked = item.days.includes(Number(input.value)); });
+    updateRepeatSummary();
     $('#routine-dialog-title').textContent = item ? '编辑作息' : '添加作息';
     showDialog($('#routine-dialog'));
   }
@@ -353,6 +420,7 @@
     const form = $('#record-form');
     const item = id ? state.records.find(record => record.id === id) : null;
     form.reset();
+    form.elements.id.value = '';
     form.dataset.previousId = '';
     $('.form-error', form).textContent = '';
     form.elements.date.max = Data.todayKey();
@@ -428,25 +496,83 @@
     finally { $('#import-file').value = ''; }
   }
 
+  async function toggleRoutine(id, completedOnly = false) {
+    if (!canEdit()) return;
+    await persist(current => {
+      const routine = current.routines.find(item => item.id === id);
+      if (!routine) throw new Error('这条作息已在其他页面删除，请刷新后重试。');
+      const key = Data.todayKey();
+      const checks = new Set(current.checks[key] || []);
+      if (!checks.has(id) && !Data.isRoutineScheduled(routine, key)) throw new Error('这条作息今天未安排，或已暂停，请查看作息计划。');
+      if (checks.has(id) && !completedOnly) checks.delete(id); else checks.add(id);
+      current.checks[key] = [...checks];
+      return current;
+    }, '今日打卡已更新');
+  }
+
+  function resetRecordFilters() {
+    $('#record-search').value = '';
+    $('#record-filter').value = 'all';
+    $('#record-sort').value = 'newest';
+    recordStatus = 'all';
+  }
+
   document.addEventListener('click', async event => {
     const close = event.target.closest('[data-close]');
     if (close) { document.getElementById(close.dataset.close).close(); return; }
     const button = event.target.closest('[data-action]');
-    if (!button) return;
+    if (!button || button.disabled) return;
     const { action, id, type } = button.dataset;
+    const wasFocused = document.activeElement === button;
     switch (action) {
       case 'add-routine': openRoutine(); break;
       case 'edit-routine': openRoutine(id); break;
       case 'delete-routine': await deleteItem('routine', id); break;
       case 'toggle-routine':
+      case 'complete-next':
+        button.disabled = true;
+        await toggleRoutine(action === 'complete-next' ? nextRoutineId : id, action === 'complete-next');
+        button.disabled = false;
+        if (wasFocused) restoreActionFocus(button.dataset);
+        break;
+      case 'pause-routine':
+        if (!canEdit()) break;
+        button.disabled = true;
         await persist(current => {
-          if (!current.routines.some(item => item.id === id)) throw new Error('这条作息已在其他页面删除，请刷新后重试。');
-          const key = Data.todayKey();
-          const checks = new Set(current.checks[key] || []);
-          if (checks.has(id)) checks.delete(id); else checks.add(id);
-          current.checks[key] = [...checks];
+          const routine = current.routines.find(item => item.id === id);
+          if (!routine) throw new Error('这条作息已被删除，请刷新后重试。');
+          routine.paused = !routine.paused;
           return current;
-        }, '今日打卡已更新');
+        }, state.routines.find(item => item.id === id)?.paused ? '作息已恢复' : '作息已暂停，历史打卡会保留');
+        button.disabled = false;
+        if (wasFocused) restoreActionFocus(button.dataset);
+        break;
+      case 'filter-today':
+      case 'show-all-routines':
+        todayFilter = button.dataset.filter || 'all';
+        if (state) render();
+        if (action === 'show-all-routines') $('[data-action="filter-today"][data-filter="all"]').focus();
+        break;
+      case 'show-plans': location.hash = 'routine'; break;
+      case 'repeat-preset':
+        $('#routine-form').querySelectorAll('[name="days"]').forEach(input => { input.checked = button.dataset.days.split(',').includes(input.value); });
+        updateRepeatSummary();
+        break;
+      case 'filter-records':
+        recordStatus = button.dataset.filter;
+        if (state) renderRecords();
+        break;
+      case 'reset-record-filters':
+        resetRecordFilters();
+        if (state) renderRecords();
+        $('#record-search').focus();
+        break;
+      case 'show-planned':
+        resetRecordFilters();
+        recordStatus = 'planned';
+        $('#record-sort').value = 'upcoming';
+        if (state) renderRecords();
+        location.hash = 'health';
         break;
       case 'add-record': openRecord(null, type || 'checkup'); break;
       case 'edit-record': openRecord(id); break;
@@ -463,14 +589,14 @@
     const form = event.currentTarget;
     const fields = new FormData(form);
     const id = fields.get('id');
-    const item = { id: id || crypto.randomUUID(), title: fields.get('title'), time: fields.get('time'), category: fields.get('category'), note: fields.get('note') };
+    const item = { id: id || crypto.randomUUID(), title: fields.get('title'), time: fields.get('time'), category: fields.get('category'), note: fields.get('note'), days: fields.getAll('days').map(Number), paused: false };
     const submit = $('button[type="submit"]', form);
     submit.disabled = true;
     const saved = await persist(current => {
       if (id) {
         const index = current.routines.findIndex(entry => entry.id === id);
         if (index < 0) throw new Error('这条作息已在其他页面删除，请关闭后重试。');
-        current.routines[index] = item;
+        current.routines[index] = { ...item, paused: current.routines[index].paused };
       } else current.routines.push(item);
       return current;
     }, id ? '作息已更新' : '新作息已添加', form);
@@ -508,7 +634,11 @@
     event.preventDefault();
     $('#main').focus();
   });
-  $('#record-filter').addEventListener('change', () => { if (state) renderRecords(); });
+  ['#record-filter', '#record-sort'].forEach(selector => $(selector).addEventListener('change', () => { if (state) renderRecords(); }));
+  $('#record-search').addEventListener('input', () => { if (state) renderRecords(); });
+  $('#routine-form').addEventListener('change', event => {
+    if (event.target.name === 'days') updateRepeatSummary();
+  });
   document.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('close', () => {
     const target = dialog.returnFocus;
     if (!target || document.querySelector('dialog[open]')) return;
