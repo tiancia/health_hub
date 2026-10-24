@@ -146,10 +146,26 @@
     const time = element('time', 'routine-time', routine.time);
     time.dateTime = routine.time;
     const marker = element('div', 'category-icon ' + routine.category);
+    marker.setAttribute('role', 'img');
+    marker.setAttribute('aria-label', category.label);
     marker.append(icon(category.icon));
     const body = element('div', 'routine-body');
     body.append(element('h3', '', routine.title));
-    if (plan) body.append(element('span', 'routine-repeat', repeatLabel(routine.days) + (routine.paused ? ' · 已暂停' : Data.isRoutineScheduled(routine, day) ? ' · 今天有安排' : '')));
+    if (plan) {
+      const weekdays = [1, 2, 3, 4, 5, 6, 0];
+      const currentWeekday = new Date(day + 'T12:00:00').getDay();
+      const days = element('span', 'routine-days');
+      days.setAttribute('aria-label', repeatLabel(routine.days) + '重复');
+      weekdays.forEach(value => {
+        const active = routine.days.includes(value);
+        const node = element('span', 'routine-day' + (active ? ' is-on' : '') + (value === currentWeekday ? ' is-today' : ''), '日一二三四五六'[value]);
+        node.setAttribute('aria-hidden', 'true');
+        days.append(node);
+      });
+      body.append(days);
+      if (routine.paused) body.append(element('span', 'routine-state is-paused', '已暂停'));
+      else if (!Data.isRoutineScheduled(routine, day)) body.append(element('span', 'routine-state is-off', '今天不安排'));
+    }
     if (routine.note) body.append(element('p', '', routine.note));
     row.append(time, marker, body);
     if (plan) {
@@ -207,7 +223,7 @@
     $('#next-note').textContent = next?.note || (next ? '准备好了就开始，完成后给自己一个小小的肯定。' : '生活不用满分，找到适合自己的节奏就好。');
     $('#next-complete').hidden = !next;
     $('#next-complete').setAttribute('aria-label', next ? '完成下一项：' + next.title : '今天没有待完成安排');
-    $('.day-progress').setAttribute('aria-label', '今日完成 ' + completed + ' 项，共 ' + routines.length + ' 项');
+    $('.hero-side').setAttribute('aria-label', '今日完成 ' + completed + ' 项，共 ' + routines.length + ' 项');
   }
 
   function renderUpcoming() {
@@ -269,16 +285,23 @@
     }
     const maximum = Math.max(5, ...dates.map(item => item.count));
     const container = $('#week-days');
-    container.replaceChildren(...dates.map(item => {
+    const fills = [];
+    container.replaceChildren(...dates.map((item, index) => {
       const node = element('div', 'week-day' + (item.key === day ? ' is-today' : ''));
       node.setAttribute('aria-label', formatDate(item.key, false) + '，打卡 ' + item.count + ' 次');
       const bar = element('div', 'week-bar');
       const fill = element('span');
-      fill.style.height = (item.count / maximum * 100) + '%';
+      fill.style.height = '0%';
+      fill.style.transitionDelay = (index * 45) + 'ms';
       bar.append(fill);
+      fills.push({ fill, height: (item.count / maximum * 100) + '%' });
       node.append(element('span', '', item.key === day ? '今天' : ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][item.date.getDay()]), bar, element('strong', '', String(item.count)), element('small', '', (item.date.getMonth() + 1) + '/' + item.date.getDate()));
       return node;
     }));
+    // Grow the bars after layout so the height transition is visible on first paint.
+    requestAnimationFrame(() => {
+      fills.forEach(({ fill, height }) => { fill.style.height = height; });
+    });
     $('#week-total').textContent = String(dates.reduce((sum, item) => sum + item.count, 0));
   }
 
@@ -330,11 +353,13 @@
       if (record.nextDate) {
         const status = dateStatus(record.nextDate);
         side.append(element('span', 'status-pill ' + status.className, status.text));
-        side.append(actionButton('record-again', '记录完成', null, record.id, 'small-link'));
       }
       const actions = element('div', 'row-actions');
       actions.append(actionButton('edit-record', '编辑' + record.title, 'edit', record.id), actionButton('delete-record', '删除' + record.title, 'trash', record.id));
-      side.append(actions);
+      const sideActions = element('div', 'record-side-actions');
+      if (record.nextDate) sideActions.append(actionButton('record-again', '记录完成', null, record.id, 'small-link'));
+      sideActions.append(actions);
+      side.append(sideActions);
       row.append(marker, body, side);
       container.append(row);
     });
@@ -380,10 +405,22 @@
     });
     $('#page-label').textContent = labels[view];
     document.title = labels[view] + ' · 时宜';
+    const entering = document.getElementById('view-' + view);
+    if (entering && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      entering.classList.remove('is-entering');
+      void entering.offsetWidth;
+      entering.classList.add('is-entering');
+    }
     if (event) {
       $('#main').focus({ preventScroll: true });
       window.scrollTo({ top: 0, behavior: 'instant' });
     }
+    syncMasthead();
+  }
+
+  function syncMasthead() {
+    const masthead = document.querySelector('.masthead');
+    if (masthead) masthead.classList.toggle('is-scrolled', window.scrollY > 3);
   }
 
   function canEdit() {
@@ -649,6 +686,8 @@
   }));
   $('#import-file').addEventListener('change', event => importBackup(event.target.files[0]));
   window.addEventListener('hashchange', navigate);
+  window.addEventListener('scroll', syncMasthead, { passive: true });
+  window.addEventListener('resize', syncMasthead, { passive: true });
   window.addEventListener('storage', event => {
     if (event.key === Data.STORAGE_KEY || event.key === null) {
       load();
