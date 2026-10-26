@@ -2,6 +2,10 @@
 
 一个原生 HTML / CSS / JavaScript 的独立网页，用来安排每日作息，记录体检、洗牙等健康事项。数据保存在当前浏览器的 `localStorage`，无登录、无云同步、无应用后端。
 
+## 在线访问
+
+已部署至 Vercel：[https://healthhub-pearl.vercel.app/](https://healthhub-pearl.vercel.app/)。
+
 ## 启动
 
 安装 Node.js 18 或更新版本，在 PowerShell 中运行：
